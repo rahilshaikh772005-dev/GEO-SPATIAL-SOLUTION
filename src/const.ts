@@ -19,6 +19,11 @@ export const startLogin = () => {
     console.error("OAuth is not configured. Set VITE_OAUTH_PORTAL_URL and VITE_APP_ID.");
     return;
   }
+  const apiOrigin = import.meta.env.VITE_API_URL?.replace(/\/+$/, "");
+  if (apiOrigin && apiOrigin !== window.location.origin) {
+    window.location.href = `${apiOrigin}/api/oauth/start`;
+    return;
+  }
   const redirectUri = `${window.location.origin}/api/oauth/callback`;
 
   const nonce = crypto.randomUUID();

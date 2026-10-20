@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 
 describe("Civic Atlas dashboard content contract", () => {
   const homeSource = readFileSync(resolve(import.meta.dirname, "../src/pages/Home.tsx"), "utf8");
+  const citizenPagesSource = readFileSync(resolve(import.meta.dirname, "../src/pages/CitizenPages.tsx"), "utf8");
 
   it("keeps the three connected civic services visible in the citizen workspace", () => {
     expect(homeSource).toContain("Mumbai Water Supply");
@@ -11,15 +12,16 @@ describe("Civic Atlas dashboard content contract", () => {
     expect(homeSource).toContain("BMC Ward 14 Office");
   });
 
-  it("keeps the property lookup journey anchored to house number and owner name", () => {
-    expect(homeSource).toContain("House / property number");
-    expect(homeSource).toContain("Owner name");
-    expect(homeSource).toContain("Verification flow is ready to connect");
+  it("keeps property claims separate from verified ownership", () => {
+    expect(homeSource).toContain("Municipal property number");
+    expect(homeSource).toContain("Claim reason");
+    expect(homeSource).toContain("property remains unlinked until an administrator reviews it");
+    expect(homeSource).toContain("Ownership claim submitted for administrator review.");
   });
 
-  it("keeps the payment dashboard states explicit", () => {
-    expect(homeSource).toContain("₹4,280");
-    expect(homeSource).toContain("Due soon");
-    expect(homeSource).toContain("Paid");
+  it("does not describe initiated payments as confirmed success", () => {
+    expect(homeSource).toContain("is pending provider confirmation");
+    expect(citizenPagesSource).toContain("Payment initiation");
+    expect(citizenPagesSource).toContain("Your bill is not marked paid yet.");
   });
 });

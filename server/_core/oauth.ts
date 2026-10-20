@@ -1,8 +1,10 @@
-import { COOKIE_NAME, ONE_YEAR_MS, OAUTH_STATE_COOKIE, decodeOAuthState } from "@shared/const";
+import { randomUUID } from "node:crypto";
+import { COOKIE_NAME, ONE_YEAR_MS, OAUTH_STATE_COOKIE, decodeOAuthState, encodeOAuthState } from "@shared/const";
 import { parse as parseCookieHeader } from "cookie";
 import type { Express, Request, Response } from "express";
 import * as db from "../db";
 import { getSessionCookieOptions } from "./cookies";
+import { ENV } from "./env";
 import { sdk } from "./sdk";
 
 function getQueryParam(req: Request, key: string): string | undefined {
@@ -11,6 +13,31 @@ function getQueryParam(req: Request, key: string): string | undefined {
 }
 
 export function registerOAuthRoutes(app: Express) {
+  app.get("/api/oauth/start", (req: Request, res: Response) => {
+    if (!ENV.appId || !ENV.oAuthServerUrl || !ENV.publicAppUrl) {
+      res.status(503).json({ error: "OAuth server configuration is incomplete" });
+      return;
+    }
+
+    const redirectUri = `${ENV.publicAppUrl}/api/oauth/callback`;
+    const nonce = randomUUID();
+    const state = encodeOAuthState({ redirectUri, nonce });
+    res.cookie(OAUTH_STATE_COOKIE, nonce, {
+      httpOnly: true,
+      maxAge: 10 * 60 * 1000,
+      path: "/",
+      sameSite: "none",
+      secure: true,
+    });
+
+    const loginUrl = new URL(`${ENV.oAuthServerUrl}/app-auth`);
+    loginUrl.searchParams.set("appId", ENV.appId);
+    loginUrl.searchParams.set("redirectUri", redirectUri);
+    loginUrl.searchParams.set("state", state);
+    loginUrl.searchParams.set("type", "signIn");
+    res.redirect(302, loginUrl.toString());
+  });
+
   app.get("/api/oauth/callback", async (req: Request, res: Response) => {
     const code = getQueryParam(req, "code");
     const state = getQueryParam(req, "state");

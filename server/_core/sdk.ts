@@ -22,6 +22,7 @@ export type SessionPayload = {
   openId: string;
   appId: string;
   name: string;
+  sessionVersion?: number;
 };
 
 const EXCHANGE_TOKEN_PATH = `/webdev.v1.WebDevAuthPublicService/ExchangeToken`;
@@ -170,11 +171,14 @@ class SDKServer {
     openId: string,
     options: { expiresInMs?: number; name?: string } = {}
   ): Promise<string> {
+    const user = await db.getUserByOpenId(openId);
+    if (!user) throw new Error("Cannot create a session for an unknown user");
     return this.signSession(
       {
         openId,
         appId: ENV.appId,
         name: options.name || "",
+        sessionVersion: user.sessionVersion,
       },
       options
     );
@@ -193,15 +197,18 @@ class SDKServer {
       openId: payload.openId,
       appId: payload.appId,
       name: payload.name,
+      sessionVersion: payload.sessionVersion ?? 0,
     })
       .setProtectedHeader({ alg: "HS256", typ: "JWT" })
+      .setJti(crypto.randomUUID())
+      .setIssuedAt(Math.floor(issuedAt / 1000))
       .setExpirationTime(expirationSeconds)
       .sign(secretKey);
   }
 
   async verifySession(
     cookieValue: string | undefined | null
-  ): Promise<{ openId: string; appId: string; name: string } | null> {
+  ): Promise<{ openId: string; appId: string; name: string; sessionVersion: number } | null> {
     if (!cookieValue) {
       console.warn("[Auth] Missing session cookie");
       return null;
@@ -212,13 +219,14 @@ class SDKServer {
       const { payload } = await jwtVerify(cookieValue, secretKey, {
         algorithms: ["HS256"],
       });
-      const { openId, appId, name } = payload as Record<string, unknown>;
+      const { openId, appId, name, sessionVersion } = payload as Record<string, unknown>;
 
       if (
         !isNonEmptyString(openId) ||
         appId !== ENV.appId ||
         !isNonEmptyString(appId) ||
-        !isNonEmptyString(name)
+        !isNonEmptyString(name) ||
+          (typeof sessionVersion !== "number" && !openId.startsWith(CRON_OPEN_ID_PREFIX))
       ) {
         console.warn("[Auth] Session payload missing required fields");
         return null;
@@ -228,6 +236,7 @@ class SDKServer {
         openId,
         appId,
         name,
+        sessionVersion: typeof sessionVersion === "number" ? sessionVersion : -1,
       };
     } catch (error) {
       console.warn("[Auth] Session verification failed", String(error));
@@ -309,6 +318,14 @@ class SDKServer {
         console.error("[Auth] Failed to sync user from OAuth:", error);
         throw ForbiddenError("Failed to sync user info");
       }
+    }
+
+    if (!user) {
+      throw ForbiddenError("User not found");
+    }
+
+    if (session.sessionVersion !== user.sessionVersion) {
+      throw ForbiddenError("Session has been revoked");
     }
 
     if (!user) {

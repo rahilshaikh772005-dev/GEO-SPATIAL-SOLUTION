@@ -1,16 +1,22 @@
-import { desc, eq, inArray, or, sql } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
+import { and, desc, eq, inArray, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
-import { bills, InsertProperty, payments, properties, InsertUser, users } from "../drizzle/schema";
+import { bills, InsertProperty, payments, properties, propertyClaims, InsertUser, users } from "../drizzle/schema";
 import { ENV } from './_core/env';
 
 let _db: ReturnType<typeof drizzle> | null = null;
 
 // Lazily create the drizzle instance so local tooling can run without a DB.
 export async function getDb() {
-  if (!_db && process.env.DATABASE_URL) {
+  if (!_db && !ENV.databaseUrl) {
+    if (ENV.demoMode) return null;
+    throw new Error("DATABASE_URL is required unless explicit development demo mode is enabled");
+  }
+  if (!_db && ENV.databaseUrl) {
     try {
-      _db = drizzle(process.env.DATABASE_URL);
+      _db = drizzle(ENV.databaseUrl);
     } catch (error) {
+        if (!ENV.demoMode) throw error;
       console.warn("[Database] Failed to connect:", error);
       _db = null;
     }
@@ -89,6 +95,12 @@ export async function getUserByOpenId(openId: string) {
   return result.length > 0 ? result[0] : undefined;
 }
 
+export async function revokeUserSessions(userId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database is not configured");
+  await db.update(users).set({ sessionVersion: sql`${users.sessionVersion} + 1` }).where(eq(users.id, userId));
+}
+
 export async function listPropertiesForUser(userId: number) {
   const db = await getDb();
   if (!db) return [];
@@ -100,6 +112,38 @@ export async function searchProperties(query: string) {
   if (!db) return [];
   const pattern = `%${query}%`;
   return db.select().from(properties).where(or(sql`${properties.propertyNo} like ${pattern}`, sql`${properties.houseNo} like ${pattern}`, sql`${properties.ownerName} like ${pattern}`)).limit(50);
+}
+
+export async function searchPropertiesForUser(query: string, userId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  const pattern = `%${query}%`;
+  return db.select().from(properties).where(and(
+    eq(properties.ownerId, userId),
+    or(sql`${properties.propertyNo} like ${pattern}`, sql`${properties.houseNo} like ${pattern}`, sql`${properties.ownerName} like ${pattern}`),
+  )).limit(50);
+}
+
+export async function lookupPublicProperty(propertyNo: string) {
+  const db = await getDb();
+  if (!db) return null;
+  const [property] = await db.select({ propertyNo: properties.propertyNo })
+    .from(properties)
+    .where(eq(properties.propertyNo, propertyNo))
+    .limit(1);
+  return property ? { propertyNo: property.propertyNo } : null;
+}
+
+export async function getPropertiesInBounds(bounds: { north: number; south: number; east: number; west: number }) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select({ id: properties.id, propertyNo: properties.propertyNo, latitude: properties.latitude, longitude: properties.longitude })
+    .from(properties)
+    .where(and(
+      sql`${properties.latitude} between ${bounds.south} and ${bounds.north}`,
+      sql`${properties.longitude} between ${bounds.west} and ${bounds.east}`,
+    ))
+    .limit(500);
 }
 
 export async function getBillsForProperties(propertyIds: number[]) {
@@ -133,8 +177,86 @@ export async function updateProperty(id: number, changes: Partial<InsertProperty
 export async function deleteProperty(id: number) {
   const db = await getDb();
   if (!db) throw new Error("Database is not configured");
+  const [property] = await db.select({ id: properties.id }).from(properties).where(eq(properties.id, id)).limit(1);
+  if (!property) return { success: false as const, reason: "NOT_FOUND" as const };
+  const [billCount] = await db.select({ count: sql<number>`count(*)` }).from(bills).where(eq(bills.propertyId, id));
+  if (Number(billCount?.count ?? 0) > 0) return { success: false as const, reason: "HAS_FINANCIAL_RECORDS" as const };
   await db.delete(properties).where(eq(properties.id, id));
   return { success: true as const };
+}
+
+export async function createOwnershipClaim(userId: number, propertyNo: string, claimReason: string) {
+  const db = await getDb();
+  if (!db) throw new Error("Database is not configured");
+
+  return db.transaction(async (tx) => {
+    const [property] = await tx.select({ id: properties.id, ownerId: properties.ownerId })
+      .from(properties)
+      .where(eq(properties.propertyNo, propertyNo))
+      .limit(1)
+      .for("update");
+    if (!property) return { ok: false as const, reason: "NOT_FOUND" as const };
+    if (property.ownerId !== null) return { ok: false as const, reason: "NOT_CLAIMABLE" as const };
+
+    const [existingClaim] = await tx.select({ id: propertyClaims.id })
+      .from(propertyClaims)
+      .where(and(
+        eq(propertyClaims.propertyId, property.id),
+        eq(propertyClaims.claimantUserId, userId),
+        eq(propertyClaims.status, "pending"),
+      ))
+      .limit(1);
+    if (existingClaim) return { ok: false as const, reason: "ALREADY_PENDING" as const };
+
+    const [inserted] = await tx.insert(propertyClaims).values({ propertyId: property.id, claimantUserId: userId, claimReason });
+    return { ok: true as const, claimId: Number(inserted.insertId), status: "pending" as const };
+  });
+}
+
+export async function listOwnershipClaims() {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select({
+    id: propertyClaims.id,
+    propertyNo: properties.propertyNo,
+    claimantUserId: propertyClaims.claimantUserId,
+    claimantName: users.name,
+    claimantEmail: users.email,
+    claimReason: propertyClaims.claimReason,
+    status: propertyClaims.status,
+    createdAt: propertyClaims.createdAt,
+  })
+    .from(propertyClaims)
+    .innerJoin(properties, eq(propertyClaims.propertyId, properties.id))
+    .innerJoin(users, eq(propertyClaims.claimantUserId, users.id))
+    .orderBy(desc(propertyClaims.createdAt));
+}
+
+export async function reviewOwnershipClaim(claimId: number, adminId: number, decision: "approved" | "rejected") {
+  const db = await getDb();
+  if (!db) throw new Error("Database is not configured");
+
+  return db.transaction(async (tx) => {
+    const [claim] = await tx.select({ id: propertyClaims.id, propertyId: propertyClaims.propertyId, claimantUserId: propertyClaims.claimantUserId, status: propertyClaims.status })
+      .from(propertyClaims)
+      .where(eq(propertyClaims.id, claimId))
+      .limit(1)
+      .for("update");
+    if (!claim || claim.status !== "pending") return { ok: false as const, reason: "NOT_REVIEWABLE" as const };
+
+    if (decision === "approved") {
+      const [property] = await tx.select({ ownerId: properties.ownerId })
+        .from(properties)
+        .where(eq(properties.id, claim.propertyId))
+        .limit(1)
+        .for("update");
+      if (!property || property.ownerId !== null) return { ok: false as const, reason: "NOT_CLAIMABLE" as const };
+      await tx.update(properties).set({ ownerId: claim.claimantUserId }).where(eq(properties.id, claim.propertyId));
+    }
+
+    await tx.update(propertyClaims).set({ status: decision, reviewedBy: adminId, reviewedAt: new Date() }).where(eq(propertyClaims.id, claimId));
+    return { ok: true as const, status: decision };
+  });
 }
 
 export async function createBill(bill: typeof bills.$inferInsert) {
@@ -144,28 +266,75 @@ export async function createBill(bill: typeof bills.$inferInsert) {
   return { success: true as const };
 }
 
-export async function updateBillStatus(id: number, status: "unpaid" | "paid" | "partially_paid" | "overdue") {
+export async function updateBillStatus(id: number, status: "unpaid" | "overdue") {
   const db = await getDb();
   if (!db) throw new Error("Database is not configured");
-  await db.update(bills).set({ status }).where(eq(bills.id, id));
-  return { success: true as const };
+  const result = await db.update(bills).set({ status }).where(and(eq(bills.id, id), inArray(bills.status, ["unpaid", "overdue"])));
+  return { success: result[0].affectedRows > 0 };
 }
 
-export async function createPayment(userId: number, billId: number, amount: number, reference: string) {
+export async function initiatePayment(userId: number, billId: number) {
   const db = await getDb();
   if (!db) throw new Error("Database is not configured");
-  await db.insert(payments).values({ userId, billId, amount, reference, status: "success" });
-  await db.update(bills).set({ status: "paid" }).where(eq(bills.id, billId));
-  return { reference, status: "success" as const };
+
+  return db.transaction(async (tx) => {
+    const [bill] = await tx.select({ id: bills.id, amount: bills.amount, status: bills.status })
+      .from(bills)
+      .innerJoin(properties, eq(bills.propertyId, properties.id))
+      .where(and(eq(bills.id, billId), eq(properties.ownerId, userId)))
+      .limit(1)
+      .for("update");
+    if (!bill) return { ok: false as const, reason: "NOT_FOUND" as const };
+    if (bill.status === "paid") return { ok: false as const, reason: "NOT_PAYABLE" as const };
+
+    const [existingIntent] = await tx.select({ id: payments.id })
+      .from(payments)
+      .where(and(eq(payments.billId, billId), eq(payments.status, "pending")))
+      .limit(1);
+    if (existingIntent) return { ok: false as const, reason: "ALREADY_PENDING" as const };
+
+    const reference = `PAY-${randomUUID()}`;
+    await tx.insert(payments).values({ userId, billId, amount: bill.amount, reference, status: "pending" });
+    return { ok: true as const, reference, status: "pending" as const, amount: bill.amount };
+  });
+}
+
+// Call only after verifying the provider's webhook signature and event authenticity.
+export async function confirmPaymentFromProvider(reference: string, providerPaymentId: string, confirmedAmount: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database is not configured");
+
+  return db.transaction(async (tx) => {
+    const [payment] = await tx.select({ id: payments.id, billId: payments.billId, amount: payments.amount, status: payments.status, billStatus: bills.status })
+      .from(payments)
+      .innerJoin(bills, eq(payments.billId, bills.id))
+      .where(eq(payments.reference, reference))
+      .limit(1)
+      .for("update");
+    if (!payment) return { ok: false as const, reason: "NOT_FOUND" as const };
+    if (payment.status === "success") return { ok: true as const, status: "success" as const };
+    if (payment.status !== "pending" || payment.billStatus === "paid") return { ok: false as const, reason: "NOT_PAYABLE" as const };
+    if (confirmedAmount !== payment.amount) return { ok: false as const, reason: "AMOUNT_MISMATCH" as const };
+
+    await tx.update(payments).set({ status: "success", providerPaymentId, paidAt: new Date() }).where(eq(payments.id, payment.id));
+    await tx.update(bills).set({ status: "paid" }).where(eq(bills.id, payment.billId));
+    return { ok: true as const, status: "success" as const };
+  });
 }
 
 export async function getAdminSummary() {
   const db = await getDb();
-  if (!db) return { citizens: 0, properties: 0, totalRevenue: 0, outstanding: 0, mapProperties: [] };
+  if (!db) return { citizens: 0, properties: 0, totalRevenue: 0, outstanding: 0 };
   const [citizenCount] = await db.select({ count: sql<number>`count(*)` }).from(users).where(eq(users.role, "user"));
   const [propertyCount] = await db.select({ count: sql<number>`count(*)` }).from(properties);
   const [revenue] = await db.select({ total: sql<number>`coalesce(sum(${payments.amount}), 0)` }).from(payments).where(eq(payments.status, "success"));
   const [outstanding] = await db.select({ total: sql<number>`coalesce(sum(${bills.amount}), 0)` }).from(bills).where(inArray(bills.status, ["unpaid", "overdue", "partially_paid"]));
-  const mapProperties = await db.select().from(properties).limit(100);
-  return { citizens: Number(citizenCount?.count ?? 0), properties: Number(propertyCount?.count ?? 0), totalRevenue: Number(revenue?.total ?? 0), outstanding: Number(outstanding?.total ?? 0), mapProperties };
+  return { citizens: Number(citizenCount?.count ?? 0), properties: Number(propertyCount?.count ?? 0), totalRevenue: Number(revenue?.total ?? 0), outstanding: Number(outstanding?.total ?? 0) };
+}
+
+export async function checkDatabaseConnection() {
+  const db = await getDb();
+  if (!db) return false;
+  await db.execute(sql`select 1`);
+  return true;
 }

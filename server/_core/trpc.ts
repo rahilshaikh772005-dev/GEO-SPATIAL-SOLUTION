@@ -27,6 +27,16 @@ const requireUser = t.middleware(async opts => {
 
 export const protectedProcedure = t.procedure.use(requireUser);
 
+export const citizenProcedure = protectedProcedure.use(
+  t.middleware(async opts => {
+    const user = opts.ctx.user;
+    if (!user || user.role !== "user") {
+      throw new TRPCError({ code: "FORBIDDEN", message: "Citizen access is required" });
+    }
+    return opts.next({ ctx: { user } });
+  }),
+);
+
 export const adminProcedure = t.procedure.use(
   t.middleware(async opts => {
     const { ctx, next } = opts;

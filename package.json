@@ -10,6 +10,8 @@
     "start": "pnpm --dir server start",
     "check": "pnpm --dir server check",
     "test": "pnpm --dir server test",
+    "android:sync": "pnpm --dir server android:sync",
+    "android:open": "pnpm --dir server android:open",
     "db:push": "pnpm --dir server db:push",
     "db:seed": "pnpm --dir server db:seed"
   }

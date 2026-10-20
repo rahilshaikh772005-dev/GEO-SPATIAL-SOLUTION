@@ -17,6 +17,7 @@ export const users = mysqlTable("users", {
   email: varchar("email", { length: 320 }),
   loginMethod: varchar("loginMethod", { length: 64 }),
   role: mysqlEnum("role", ["user", "admin"]).default("user").notNull(),
+  sessionVersion: int("sessionVersion").default(0).notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   lastSignedIn: timestamp("lastSignedIn").defaultNow().notNull(),
@@ -29,7 +30,7 @@ export const properties = mysqlTable("properties", {
   id: int("id").autoincrement().primaryKey(),
   propertyNo: varchar("propertyNo", { length: 32 }).notNull().unique(),
   houseNo: varchar("houseNo", { length: 128 }).notNull(),
-  ownerId: int("ownerId"),
+  ownerId: int("ownerId").references(() => users.id, { onDelete: "set null" }),
   ownerName: varchar("ownerName", { length: 160 }).notNull(),
   address: text("address").notNull(),
   latitude: double("latitude").notNull(),
@@ -38,9 +39,20 @@ export const properties = mysqlTable("properties", {
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
 
+export const propertyClaims = mysqlTable("propertyClaims", {
+  id: int("id").autoincrement().primaryKey(),
+  propertyId: int("propertyId").notNull().references(() => properties.id, { onDelete: "restrict" }),
+  claimantUserId: int("claimantUserId").notNull().references(() => users.id, { onDelete: "cascade" }),
+  claimReason: text("claimReason").notNull(),
+  status: mysqlEnum("status", ["pending", "approved", "rejected"]).default("pending").notNull(),
+  reviewedBy: int("reviewedBy").references(() => users.id, { onDelete: "set null" }),
+  reviewedAt: timestamp("reviewedAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
 export const bills = mysqlTable("bills", {
   id: int("id").autoincrement().primaryKey(),
-  propertyId: int("propertyId").notNull(),
+  propertyId: int("propertyId").notNull().references(() => properties.id, { onDelete: "cascade" }),
   billType: mysqlEnum("billType", ["property_tax", "water", "electricity"]).notNull(),
   amount: int("amount").notNull(),
   dueDate: timestamp("dueDate").notNull(),
@@ -51,12 +63,14 @@ export const bills = mysqlTable("bills", {
 
 export const payments = mysqlTable("payments", {
   id: int("id").autoincrement().primaryKey(),
-  billId: int("billId").notNull(),
-  userId: int("userId").notNull(),
+  billId: int("billId").notNull().references(() => bills.id, { onDelete: "restrict" }),
+  userId: int("userId").notNull().references(() => users.id, { onDelete: "restrict" }),
   amount: int("amount").notNull(),
   reference: varchar("reference", { length: 64 }).notNull().unique(),
-  status: mysqlEnum("status", ["success", "pending", "failed"]).default("success").notNull(),
-  paidAt: timestamp("paidAt").defaultNow().notNull(),
+  providerPaymentId: varchar("providerPaymentId", { length: 128 }).unique(),
+  status: mysqlEnum("status", ["success", "pending", "failed"]).default("pending").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  paidAt: timestamp("paidAt"),
 });
 
 export type Property = typeof properties.$inferSelect;

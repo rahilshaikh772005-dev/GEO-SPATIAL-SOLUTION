@@ -8,6 +8,8 @@ import { registerStorageProxy } from "./storageProxy";
 import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
+import { ENV, validateRuntimeConfig } from "./env";
+import * as db from "../db";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -29,11 +31,42 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
 }
 
 async function startServer() {
+  validateRuntimeConfig();
   const app = express();
   const server = createServer(app);
+  const capacitorOrigins = new Set(
+    (process.env.CAPACITOR_ORIGINS ?? "")
+      .split(",")
+      .map(origin => origin.trim())
+      .filter(Boolean)
+  );
+  app.use((req, res, next) => {
+    const origin = req.headers.origin;
+    if (origin && capacitorOrigins.has(origin)) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Access-Control-Allow-Credentials", "true");
+      res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+      res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+      res.vary("Origin");
+      if (req.method === "OPTIONS") {
+        res.sendStatus(204);
+        return;
+      }
+    }
+    next();
+  });
   // Configure body parser with larger size limit for file uploads
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
+  app.get("/health/live", (_req, res) => res.sendStatus(204));
+  app.get("/health/ready", async (_req, res) => {
+    try {
+      await db.checkDatabaseConnection();
+      res.sendStatus(204);
+    } catch {
+      res.sendStatus(503);
+    }
+  });
   registerStorageProxy(app);
   registerOAuthRoutes(app);
   // tRPC API
@@ -51,10 +84,13 @@ async function startServer() {
     serveStatic(app);
   }
 
-  const preferredPort = parseInt(process.env.PORT || "3000");
-  const port = await findAvailablePort(preferredPort);
+  const preferredPort = Number.parseInt(process.env.PORT || "3000", 10);
+  if (!Number.isInteger(preferredPort) || preferredPort < 1 || preferredPort > 65535) {
+    throw new Error("PORT must be a valid TCP port");
+  }
+  const port = ENV.isProduction ? preferredPort : await findAvailablePort(preferredPort);
 
-  if (port !== preferredPort) {
+  if (!ENV.isProduction && port !== preferredPort) {
     console.log(`Port ${preferredPort} is busy, using port ${port} instead`);
   }
 

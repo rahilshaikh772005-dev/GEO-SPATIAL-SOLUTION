@@ -1,7 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { appRouter } from "./routers";
 import { COOKIE_NAME } from "./shared/const";
 import type { TrpcContext } from "./_core/context";
+
+vi.mock("./db", () => ({
+  revokeUserSessions: vi.fn().mockResolvedValue(undefined),
+}));
+
+import * as db from "./db";
 
 type CookieCall = {
   name: string;
@@ -58,5 +64,6 @@ describe("auth.logout", () => {
       httpOnly: true,
       path: "/",
     });
+    expect(db.revokeUserSessions).toHaveBeenCalledWith(1);
   });
 });
