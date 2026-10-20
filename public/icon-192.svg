@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192" role="img" aria-label="Civic Atlas app icon">
+  <defs>
+    <linearGradient id="bg" x1="0%" x2="100%" y1="0%" y2="100%">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#2563eb"/>
+    </linearGradient>
+  </defs>
+  <rect width="192" height="192" rx="36" fill="url(#bg)"/>
+  <path d="M96 40c-24 0-44 20-44 44 0 31 40 70 44 74 4-4 44-43 44-74 0-24-20-44-44-44zm0 22a22 22 0 1 1 0 44 22 22 0 0 1 0-44z" fill="#ffffff" opacity="0.95"/>
+  <path d="M52 118h88v18H52zm12-48h64v18H64zm16 24h32v18H80z" fill="#7dd3fc" opacity="0.9"/>
+</svg>

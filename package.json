@@ -1,0 +1,16 @@
+{
+  "name": "civic-atlas",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "packageManager": "pnpm@10.4.1",
+  "scripts": {
+    "dev": "pnpm --dir server dev",
+    "build": "pnpm --dir server build",
+    "start": "pnpm --dir server start",
+    "check": "pnpm --dir server check",
+    "test": "pnpm --dir server test",
+    "db:push": "pnpm --dir server db:push",
+    "db:seed": "pnpm --dir server db:seed"
+  }
+}
