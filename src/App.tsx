@@ -10,7 +10,7 @@ import Login from "./pages/Login";
 import PublicHome from "./pages/PublicHome";
 import Register from "./pages/Register";
 import { About, Contact } from "./pages/InfoPages";
-import { BillDetails, CitizenDashboard, MyBills, MyProperty, Payment, PaymentHistory, PaymentSuccess, Profile, PropertyMap } from "./pages/CitizenPages";
+import { BillDetails, CitizenDashboard, MyBills, MyProperty, Payment, PaymentHistory, PaymentReceipt, PaymentSuccess, Profile, PropertyMap } from "./pages/CitizenPages";
 
 function Router() {
   // make sure to consider if you need authentication for certain routes
@@ -29,6 +29,7 @@ function Router() {
       <Route path={"/bill/:id"}>{(params) => <BillDetails id={params.id} />}</Route>
       <Route path={"/payment/:id"}>{(params) => <Payment id={params.id} />}</Route>
       <Route path={"/payment-success"} component={PaymentSuccess} />
+      <Route path={"/receipt/:reference"}>{(params) => <PaymentReceipt reference={params.reference} />}</Route>
       <Route path={"/payment-history"} component={PaymentHistory} />
       <Route path={"/profile"} component={Profile} />
       <Route path={"/admin"} component={Admin} />

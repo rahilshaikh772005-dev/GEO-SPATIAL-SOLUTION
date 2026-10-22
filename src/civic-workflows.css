@@ -1,0 +1,178 @@
+.admin-property-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+  align-items: end;
+  padding: 0 20px 20px;
+}
+
+.admin-property-form label {
+  display: grid;
+  gap: 6px;
+  color: #65748b;
+  font-size: 11px;
+}
+
+.admin-property-form input,
+.admin-property-form select {
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid #dfe5ee;
+  border-radius: 7px;
+  background: #fff;
+  color: #2e3d56;
+}
+
+.admin-property-form button,
+.admin-claim-actions button,
+.admin-claim > button,
+.admin-property-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 34px;
+  padding: 7px 10px;
+  border: 1px solid #dfe5ee;
+  border-radius: 7px;
+  background: #fff;
+  color: #315dca;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.admin-property-form button:disabled,
+.admin-claim-actions button:disabled,
+.admin-claim > button:disabled,
+.admin-property-actions button:disabled {
+  cursor: not-allowed;
+  opacity: .55;
+}
+
+.admin-claims {
+  padding: 0 20px;
+}
+
+.admin-claim {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 0;
+  border-top: 1px solid #edf0f5;
+  color: #718097;
+  font-size: 11px;
+}
+
+.admin-claim > div:first-child {
+  display: grid;
+  gap: 5px;
+}
+
+.admin-claim strong {
+  color: #2e3d56;
+}
+
+.admin-claim p {
+  margin: 2px 0;
+}
+
+.admin-claim-actions,
+.admin-property-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.admin-map iframe {
+  display: block;
+}
+
+.bill-filter-row button {
+  padding: 7px 10px;
+  border: 1px solid #dfe5ee;
+  border-radius: 999px;
+  background: #fff;
+  color: #65748b;
+  font: inherit;
+  cursor: pointer;
+}
+
+.bill-filter-row button[aria-pressed="true"] {
+  border-color: #315dca;
+  background: #eff3ff;
+  color: #315dca;
+}
+
+.large-map iframe {
+  display: block;
+  width: 100%;
+  min-height: 360px;
+  border: 0;
+}
+
+.receipt-heading,
+.receipt-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.receipt-heading {
+  justify-content: flex-start;
+}
+
+.receipt-heading h2 {
+  margin: 4px 0 0;
+}
+
+.receipt-card dl {
+  display: grid;
+  grid-template-columns: minmax(130px, 1fr) 2fr;
+  gap: 12px;
+  margin: 24px 0;
+}
+
+.receipt-card dd {
+  overflow-wrap: anywhere;
+}
+
+.receipt-actions {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  margin-top: 20px;
+}
+
+@media print {
+  .citizen-header,
+  .info-back,
+  .receipt-actions {
+    display: none !important;
+  }
+
+  .citizen-page,
+  .citizen-content {
+    background: #fff !important;
+    color: #000 !important;
+    padding: 0 !important;
+  }
+
+  .receipt-card {
+    border: 0 !important;
+    box-shadow: none !important;
+  }
+}
+
+@media (max-width: 640px) {
+  .admin-claim {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .receipt-card dl {
+    grid-template-columns: 1fr;
+    gap: 5px;
+  }
+}

@@ -19,9 +19,10 @@ describe("Civic Atlas dashboard content contract", () => {
     expect(homeSource).toContain("Ownership claim submitted for administrator review.");
   });
 
-  it("does not describe initiated payments as confirmed success", () => {
-    expect(homeSource).toContain("is pending provider confirmation");
-    expect(citizenPagesSource).toContain("Payment initiation");
-    expect(citizenPagesSource).toContain("Your bill is not marked paid yet.");
+  it("requires provider confirmation before showing paid status", () => {
+    expect(citizenPagesSource).toContain("Continue to Razorpay secure checkout.");
+    expect(citizenPagesSource).toContain("The bill will be marked paid only after the payment is verified with the provider.");
+    expect(citizenPagesSource).toContain("Payment confirmation is still pending.");
+    expect(citizenPagesSource).toContain("Payment verified.");
   });
 });

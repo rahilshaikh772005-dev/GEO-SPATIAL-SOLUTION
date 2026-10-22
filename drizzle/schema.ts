@@ -67,6 +67,7 @@ export const payments = mysqlTable("payments", {
   userId: int("userId").notNull().references(() => users.id, { onDelete: "restrict" }),
   amount: int("amount").notNull(),
   reference: varchar("reference", { length: 64 }).notNull().unique(),
+  providerOrderId: varchar("providerOrderId", { length: 128 }).unique(),
   providerPaymentId: varchar("providerPaymentId", { length: 128 }).unique(),
   status: mysqlEnum("status", ["success", "pending", "failed"]).default("pending").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),

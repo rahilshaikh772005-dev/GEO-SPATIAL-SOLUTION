@@ -158,6 +158,38 @@ export async function getPaymentHistory(userId: number) {
   return db.select().from(payments).where(eq(payments.userId, userId)).orderBy(desc(payments.paidAt));
 }
 
+export async function getAdminProperties() {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select({
+    id: properties.id,
+    propertyNo: properties.propertyNo,
+    houseNo: properties.houseNo,
+    ownerName: properties.ownerName,
+    address: properties.address,
+    latitude: properties.latitude,
+    longitude: properties.longitude,
+  }).from(properties).orderBy(desc(properties.updatedAt)).limit(500);
+}
+
+export async function getAdminBills() {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select({
+    id: bills.id,
+    propertyId: bills.propertyId,
+    propertyNo: properties.propertyNo,
+    billType: bills.billType,
+    amount: bills.amount,
+    dueDate: bills.dueDate,
+    status: bills.status,
+  })
+    .from(bills)
+    .innerJoin(properties, eq(bills.propertyId, properties.id))
+    .orderBy(desc(bills.dueDate))
+    .limit(500);
+}
+
 export async function createProperty(property: InsertProperty) {
   const db = await getDb();
   if (!db) throw new Error("Database is not configured");
@@ -299,25 +331,136 @@ export async function initiatePayment(userId: number, billId: number) {
   });
 }
 
-// Call only after verifying the provider's webhook signature and event authenticity.
+export async function attachProviderOrder(reference: string, providerOrderId: string) {
+  const db = await getDb();
+  if (!db) throw new Error("Database is not configured");
+  const result = await db.update(payments)
+    .set({ providerOrderId })
+    .where(and(eq(payments.reference, reference), eq(payments.status, "pending")));
+  if (result[0].affectedRows !== 1) {
+    throw new Error("Pending payment request could not be attached to the provider order");
+  }
+}
+
+export async function markPaymentFailed(reference: string, providerPaymentId?: string) {
+  const db = await getDb();
+  if (!db) throw new Error("Database is not configured");
+  await db.update(payments)
+    .set({ status: "failed", ...(providerPaymentId ? { providerPaymentId } : {}) })
+    .where(and(eq(payments.reference, reference), eq(payments.status, "pending")));
+}
+
+export async function getPaymentForUser(reference: string, userId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database is not configured");
+  const [payment] = await db.select({
+    reference: payments.reference,
+    amount: payments.amount,
+    status: payments.status,
+    providerOrderId: payments.providerOrderId,
+    providerPaymentId: payments.providerPaymentId,
+    billType: bills.billType,
+  })
+    .from(payments)
+    .innerJoin(bills, eq(payments.billId, bills.id))
+    .innerJoin(properties, eq(bills.propertyId, properties.id))
+    .where(and(eq(payments.reference, reference), eq(payments.userId, userId), eq(properties.ownerId, userId)))
+    .limit(1);
+  return payment ?? null;
+}
+
+export async function getPendingPaymentForUser(billId: number, userId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database is not configured");
+  const [payment] = await db.select({
+    reference: payments.reference,
+    amount: payments.amount,
+    providerOrderId: payments.providerOrderId,
+  })
+    .from(payments)
+    .innerJoin(bills, eq(payments.billId, bills.id))
+    .innerJoin(properties, eq(bills.propertyId, properties.id))
+    .where(and(
+      eq(payments.billId, billId),
+      eq(payments.userId, userId),
+      eq(properties.ownerId, userId),
+      eq(payments.status, "pending"),
+    ))
+    .limit(1);
+  return payment ?? null;
+}
+
+export async function getPaymentForProviderOrder(providerOrderId: string) {
+  const db = await getDb();
+  if (!db) throw new Error("Database is not configured");
+  const [payment] = await db.select({
+    reference: payments.reference,
+    amount: payments.amount,
+    status: payments.status,
+    providerPaymentId: payments.providerPaymentId,
+  })
+    .from(payments)
+    .where(eq(payments.providerOrderId, providerOrderId))
+    .limit(1);
+  return payment ?? null;
+}
+
+export async function getPaymentReceipt(reference: string, userId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database is not configured");
+  const [receipt] = await db.select({
+    reference: payments.reference,
+    providerPaymentId: payments.providerPaymentId,
+    amount: payments.amount,
+    paidAt: payments.paidAt,
+    paymentStatus: payments.status,
+    billType: bills.billType,
+    propertyNo: properties.propertyNo,
+    houseNo: properties.houseNo,
+    address: properties.address,
+    citizenName: users.name,
+    citizenEmail: users.email,
+  })
+    .from(payments)
+    .innerJoin(users, eq(payments.userId, users.id))
+    .innerJoin(bills, eq(payments.billId, bills.id))
+    .innerJoin(properties, eq(bills.propertyId, properties.id))
+    .where(and(
+      eq(payments.reference, reference),
+      eq(payments.userId, userId),
+      eq(properties.ownerId, userId),
+      eq(payments.status, "success"),
+    ))
+    .limit(1);
+  return receipt ?? null;
+}
+
+// Call only after verifying the provider signature and captured payment details.
 export async function confirmPaymentFromProvider(reference: string, providerPaymentId: string, confirmedAmount: number) {
   const db = await getDb();
   if (!db) throw new Error("Database is not configured");
 
   return db.transaction(async (tx) => {
-    const [payment] = await tx.select({ id: payments.id, billId: payments.billId, amount: payments.amount, status: payments.status, billStatus: bills.status })
+    const [payment] = await tx.select({ id: payments.id, billId: payments.billId, amount: payments.amount, status: payments.status, providerPaymentId: payments.providerPaymentId, reference: payments.reference, billStatus: bills.status })
       .from(payments)
       .innerJoin(bills, eq(payments.billId, bills.id))
       .where(eq(payments.reference, reference))
       .limit(1)
       .for("update");
     if (!payment) return { ok: false as const, reason: "NOT_FOUND" as const };
-    if (payment.status === "success") return { ok: true as const, status: "success" as const };
+    if (payment.status === "success") {
+      return payment.providerPaymentId === providerPaymentId && confirmedAmount === payment.amount
+        ? { ok: true as const, status: "success" as const }
+        : { ok: false as const, reason: "PAYMENT_MISMATCH" as const };
+    }
     if (payment.status !== "pending" || payment.billStatus === "paid") return { ok: false as const, reason: "NOT_PAYABLE" as const };
     if (confirmedAmount !== payment.amount) return { ok: false as const, reason: "AMOUNT_MISMATCH" as const };
 
     await tx.update(payments).set({ status: "success", providerPaymentId, paidAt: new Date() }).where(eq(payments.id, payment.id));
-    await tx.update(bills).set({ status: "paid" }).where(eq(bills.id, payment.billId));
+    await tx.update(bills).set({
+      status: "paid",
+      receiptUrl: `/receipt/${encodeURIComponent(payment.reference)}`,
+    }).where(eq(bills.id, payment.billId));
     return { ok: true as const, status: "success" as const };
   });
 }

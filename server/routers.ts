@@ -3,7 +3,15 @@ import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, router } from "./_core/trpc";
 import { adminProcedure, citizenProcedure, protectedProcedure } from "./_core/trpc";
+import { ENV } from "./_core/env";
 import * as db from "./db";
+import { getPropertyDatasetPage } from "./propertyDataset";
+import {
+  createRazorpayOrder,
+  fetchRazorpayPayment,
+  isRazorpayCheckoutConfigured,
+  verifyRazorpayCheckoutSignature,
+} from "./_core/paymentProvider";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 
@@ -55,15 +63,122 @@ export const appRouter = router({
       }),
     initiatePayment: citizenProcedure.input(z.object({ billId: z.number().int().positive() }).strict())
       .mutation(async ({ input, ctx }) => {
+        if (!isRazorpayCheckoutConfigured()) {
+          throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Online checkout is not configured. No payment was initiated." });
+        }
         const result = await db.initiatePayment(ctx.user.id, input.billId);
-        if (result.ok) return result;
+        if (result.ok) {
+          try {
+            const { order, keyId } = await createRazorpayOrder(result.reference, result.amount);
+            await db.attachProviderOrder(result.reference, order.id);
+            return {
+              reference: result.reference,
+              orderId: order.id,
+              keyId,
+              amount: order.amount,
+              currency: order.currency,
+              status: result.status,
+            };
+          } catch (error) {
+            console.error("[Razorpay] Checkout order creation failed", error);
+            try {
+              await db.markPaymentFailed(result.reference);
+            } catch (cleanupError) {
+              console.error("[Razorpay] Failed to close payment intent after order creation error", cleanupError);
+            }
+            throw new TRPCError({ code: "BAD_GATEWAY", message: "The payment provider could not create checkout. The bill remains unpaid." });
+          }
+        }
+        if (result.reason === "ALREADY_PENDING") {
+          const existingIntent = await db.getPendingPaymentForUser(input.billId, ctx.user.id);
+          if (existingIntent?.providerOrderId) {
+            return {
+              reference: existingIntent.reference,
+              orderId: existingIntent.providerOrderId,
+              keyId: ENV.razorpayKeyId,
+              amount: existingIntent.amount * 100,
+              currency: "INR" as const,
+              status: "pending" as const,
+            };
+          }
+        }
         if (result.reason === "NOT_FOUND") throw new TRPCError({ code: "NOT_FOUND", message: "Payable bill not found" });
-        throw new TRPCError({ code: "CONFLICT", message: result.reason === "ALREADY_PENDING" ? "A payment request is already pending" : "Bill is already paid" });
+        throw new TRPCError({ code: "CONFLICT", message: result.reason === "ALREADY_PENDING" ? "Payment checkout is still being prepared; try again shortly" : "Bill is already paid" });
+      }),
+    verifyPayment: citizenProcedure
+      .input(z.object({
+        reference: z.string().min(8).max(64),
+        orderId: z.string().min(8).max(128),
+        paymentId: z.string().min(8).max(128),
+        signature: z.string().regex(/^[a-f0-9]{64}$/i),
+      }).strict())
+      .mutation(async ({ input, ctx }) => {
+        const intent = await db.getPaymentForUser(input.reference, ctx.user.id);
+        if (!intent || intent.providerOrderId !== input.orderId) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Pending payment request not found" });
+        }
+        if (!verifyRazorpayCheckoutSignature(input.orderId, input.paymentId, input.signature)) {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Payment signature is invalid" });
+        }
+        if (intent.status === "success" && intent.providerPaymentId === input.paymentId) {
+          return { reference: input.reference, status: "success" as const };
+        }
+        if (intent.status !== "pending") {
+          throw new TRPCError({ code: "CONFLICT", message: "Payment request is no longer pending" });
+        }
+
+        let providerPayment;
+        try {
+          providerPayment = await fetchRazorpayPayment(input.paymentId);
+        } catch (error) {
+          console.error("[Razorpay] Payment verification request failed", error);
+          throw new TRPCError({ code: "BAD_GATEWAY", message: "Could not verify the payment with the provider" });
+        }
+        if (providerPayment.order_id !== input.orderId
+          || providerPayment.status !== "captured"
+          || providerPayment.currency !== "INR"
+          || providerPayment.amount !== intent.amount * 100
+        ) {
+          throw new TRPCError({ code: "CONFLICT", message: "Provider payment is not captured for the expected amount and order" });
+        }
+
+        const result = await db.confirmPaymentFromProvider(
+          input.reference,
+          input.paymentId,
+          intent.amount,
+        );
+        if (!result.ok) {
+          throw new TRPCError({ code: "CONFLICT", message: "Payment could not be matched to the outstanding bill" });
+        }
+        return { reference: input.reference, status: result.status };
+      }),
+    receipt: citizenProcedure
+      .input(z.object({ reference: z.string().min(8).max(64) }))
+      .query(async ({ input, ctx }) => {
+        const receipt = await db.getPaymentReceipt(input.reference, ctx.user.id);
+        if (!receipt) throw new TRPCError({ code: "NOT_FOUND", message: "Confirmed receipt not found" });
+        return receipt;
       }),
   }),
 
   admin: router({
     summary: adminProcedure.query(() => db.getAdminSummary()),
+    properties: adminProcedure.query(() => db.getAdminProperties()),
+    bills: adminProcedure.query(() => db.getAdminBills()),
+    propertyDataset: publicProcedure
+      .input(z.object({
+        page: z.number().int().min(1).max(240).default(1),
+        search: z.string().trim().max(160).default(""),
+      }))
+      .query(({ input, ctx }) => {
+        if (ctx.user?.role !== "admin" && !ENV.demoMode) {
+          throw new TRPCError({
+            code: ctx.user ? "FORBIDDEN" : "UNAUTHORIZED",
+            message: ctx.user ? "Admin access is required" : "Authentication is required",
+          });
+        }
+        return getPropertyDatasetPage(input);
+      }),
     searchProperties: adminProcedure.input(z.object({ query: z.string().min(1).max(160) })).query(({ input }) => db.searchProperties(input.query)),
     propertiesInBounds: adminProcedure.input(geographicBounds).query(({ input }) => db.getPropertiesInBounds(input)),
     ownershipClaims: adminProcedure.query(() => db.listOwnershipClaims()),
